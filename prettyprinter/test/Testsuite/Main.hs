@@ -17,7 +17,7 @@ import           System.Timeout        (timeout)
 
 import           Data.Text.Prettyprint.Doc
 import           Data.Text.Prettyprint.Doc.Internal
-import           Data.Text.Prettyprint.Doc.Internal.Debug
+import           Data.Text.Prettyprint.Doc.Internal.Debug (diag)
 import           Data.Text.Prettyprint.Doc.Render.Text
 
 import Test.QuickCheck.Instances.Text ()
@@ -89,7 +89,7 @@ tests = testGroup "Tests"
 
 fusionDoesNotChangeRendering :: FusionDepth -> Property
 fusionDoesNotChangeRendering depth
-  = forAllShow (arbitrary :: Gen (Doc Int)) (show . diag) (\doc ->
+  = forAllShrinkShow (arbitrary :: Gen (Doc Int)) shrink (show . diag) (\doc ->
     forAll arbitrary (\layouter ->
         let render = renderStrict . layout layouter
             rendered = render doc
@@ -103,11 +103,25 @@ fusionDoesNotChangeRendering depth
             , "Unfused:"
             , indent 4 (pretty rendered)
             , "Fused:"
-            , indent 4 (pretty renderedFused) ]
+            , indent 4 (pretty renderedFused)
+            ]
 
 instance Arbitrary ann => Arbitrary (Doc ann) where
     arbitrary = document
-    shrink = genericShrink -- Possibly not a good idea, may break invariants
+    shrink doc = case doc of
+        Fail            -> [Empty]
+        Empty           -> []
+        Char c          -> Empty : map Char (filter (/= '\n') (shrink c))
+        Text _ t        -> Empty : map pretty (shrink t)
+        Line            -> Empty : [space]
+        FlatAlt x y     -> Empty : x : y : map (uncurry FlatAlt) (shrink (x, y))
+        Cat x y         -> Empty : x : y : map (uncurry Cat) (shrink (x, y))
+        Nest i x        -> Empty : x : map (flip Nest x) (shrink i)
+        Union x y       -> Empty : x : y : map (uncurry Union) (shrink (x, y))
+        Column f        -> Empty : f 0 : map Column (shrink f)
+        WithPageWidth f -> Empty : f defaultPageWidth : map WithPageWidth (shrink f)
+        Nesting f       -> Empty : f 0 : map Nesting (shrink f)
+        Annotated a x   -> Empty : x : map (uncurry Annotated) (shrink (a, x))
 
 document :: Gen (Doc ann)
 document = (dampen . frequency)
